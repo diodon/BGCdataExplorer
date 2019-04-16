@@ -1,0 +1,341 @@
+---
+title: "BCG data Explorer"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(readr)
+library(lubridate)
+library(reshape2)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+
+library(RColorBrewer)
+palette(brewer.pal(8, "Set2"))
+
+options(scipen=999)
+
+```
+
+
+```{r setupfiles}
+
+## collections
+geoserver.typeName.phyto.species = "nrs_phyto_species_map"
+geoserver.typeName.phyto.htg = "nrs_phyto_htg_map"
+geoserver.typeName.bottle = "anmn_nrs_bgc_chemistry_data"
+
+## Station
+geoserver.siteName = "NRSMAI"   # it will depend on the collection: IMOS_SITE_CODE or site_code or Station
+
+## geoserver general
+geoserver.root = "http://geoserver-123.aodn.org.au/geoserver/ows?typeName="
+geoserver.dateFilter = ""
+geoserver.lastpart = "&SERVICE=WFS&outputFormat=csv&REQUEST=GetFeature&VERSION=1.0.0"
+```
+
+
+```{r phytoDictionary}
+NRS.names = c("NRSDAR", "NRSNIN", "NRSNSI", "NRSROT", "NRSYON",  "NRSESP", "NRSKAI", "NRSMAI", "NRSPHB")
+NRS.longNames = c("Darwin", "Ningaloo", "North%20Stradbroke", "Rottnest", "Yongala","Esperance", "Kangaroo%20Island",   "Maria%20Island", "Port%20Hacking")
+
+NRS.dict = data.frame(NRS.names, NRS.longNames, stringsAsFactors = F)
+```
+
+
+```{r getdataPHYTO}
+
+## phyotplankton abundance -- 
+geoserver.siteName.phyto = NRS.dict$NRS.longNames[NRS.dict$NRS.names==geoserver.siteName]
+phyto.spp = read_csv(paste0(geoserver.root, geoserver.typeName.phyto.species, geoserver.dateFilter, geoserver.lastpart,  "&cql_filter=Station='",  geoserver.siteName.phyto, "'"))
+
+## remove 'geom' as the last column. Not needed as lat and lon is provided
+phyto.spp = phyto.spp[,-ncol(phyto.spp)]
+## convert to long(narrow) format
+phyto.spp.lf = melt(phyto.spp, id.vars = c(1:10), variable.name = "scientificName", value.name = "abundance")
+## remove -999 as it is missing value
+phyto.spp.lf = phyto.spp.lf %>% filter(abundance!=-999)
+
+
+## phytoplankton higher groups
+phyto.htg = read_csv(paste0(geoserver.root, geoserver.typeName.phyto.htg, geoserver.dateFilter, geoserver.lastpart,  "&cql_filter=Station='",  geoserver.siteName.phyto, "'"))
+
+## remove 'geom' as the last column. Not needed as lat and lon is provided
+phyto.htg = phyto.htg[,-ncol(phyto.htg)]
+## convert to long(narrow) format
+phyto.htg.lf = melt(phyto.htg, id.vars = c(1:10), variable.name = "scientificName", value.name = "abundance")
+## remove -999 as it is missing value
+phyto.htg.lf = phyto.htg.lf %>% filter(abundance!=-999)
+
+
+```
+
+
+```{r getdataNUTRIENTS}
+
+## get nutrients
+bottle = read_csv(paste0(geoserver.root, geoserver.typeName.bottle, geoserver.dateFilter, geoserver.lastpart,  "&cql_filter=IMOS_SITE_CODE='",  geoserver.siteName, "'"))
+
+## recode depth to 0, 10, 20, 30, 40, 50, 60, 70, 80
+bottle$DEPTH.recoded = 80
+bottle$DEPTH.recoded[bottle$SAMPLE_DEPTH_M<80] = 70
+bottle$DEPTH.recoded[bottle$SAMPLE_DEPTH_M<70] = 60
+bottle$DEPTH.recoded[bottle$SAMPLE_DEPTH_M<60] = 50
+bottle$DEPTH.recoded[bottle$SAMPLE_DEPTH_M<50] = 40
+bottle$DEPTH.recoded[bottle$SAMPLE_DEPTH_M<40] = 30
+bottle$DEPTH.recoded[bottle$SAMPLE_DEPTH_M<30] = 20
+bottle$DEPTH.recoded[bottle$SAMPLE_DEPTH_M<20] = 10
+bottle$DEPTH.recoded[bottle$SAMPLE_DEPTH_M<10] = 0
+
+
+```
+
+
+
+Column {.tabset}
+-----------------------------------------------------------------------
+
+### Phytoplankton total abundace
+
+```{r}
+## Total abundance per sampling date
+phyto.abund = phyto.spp.lf %>% group_by(dateDay = floor_date(SampleDateLocal, "day")) %>% 
+  summarise(totalAbund = sum(abundance))
+
+pp = ggplot(phyto.abund, aes(dateDay, totalAbund))
+pp = pp + geom_bar(stat="identity") + 
+  ylab("Total abundance cels/l") + xlab("") + theme_bw()
+
+ggplotly(pp)
+
+```
+
+
+### Phytoplankton Richness
+
+```{r}
+## richness using abundance >=1
+phyto.richness = phyto.spp.lf %>% filter(abundance >= 1) %>% 
+  group_by(dateDay = floor_date(SampleDateLocal, "day")) %>% 
+  summarise(n = n())
+
+pp = ggplot(phyto.richness, aes(dateDay, n))
+pp = pp + geom_bar(stat="identity") + geom_smooth(span=0.3, se = F) + 
+  ylab("Number of species (with abundance > 0") + xlab("") + theme_bw()
+
+ggplotly(pp)
+
+```
+
+### Centric Diatoms abundance
+
+```{r}
+pp = ggplot(subset(phyto.htg.lf, scientificName=="Centric_diatom"), aes(x=floor_date(SampleDateLocal, "day"), y=abundance))
+pp = pp + geom_bar(stat = "identity") + 
+    ylab("Total abundance cels/l") + xlab("") + theme_bw()
+
+
+ggplotly(pp)
+```
+
+### Pennate Diatoms abundance
+
+```{r}
+pp = ggplot(subset(phyto.htg.lf, scientificName=="Pennate_diatom"), aes(x=floor_date(SampleDateLocal, "day"), y=abundance))
+pp = pp + geom_bar(stat = "identity") + 
+    ylab("Total abundance cels/l") + xlab("") + theme_bw()
+
+
+ggplotly(pp)
+```
+
+
+### Ciliate abundance
+
+```{r}
+pp = ggplot(subset(phyto.htg.lf, scientificName=="Ciliate"), aes(x=floor_date(SampleDateLocal, "day"), y=abundance))
+pp = pp + geom_bar(stat = "identity") + 
+    ylab("Total abundance cels/l") + xlab("") + theme_bw()
+
+
+ggplotly(pp)
+```
+
+### Cyanobacteria abundance
+
+```{r}
+pp = ggplot(subset(phyto.htg.lf, scientificName=="Cyanobacteria"), aes(x=floor_date(SampleDateLocal, "day"), y=abundance))
+pp = pp + geom_bar(stat = "identity") + 
+    ylab("Total abundance cels/l") + xlab("") + theme_bw()
+
+
+ggplotly(pp)
+```
+
+### Dinoflagellate abundance
+
+```{r}
+pp = ggplot(subset(phyto.htg.lf, scientificName=="Dinoflagellate"), aes(x=floor_date(SampleDateLocal, "day"), y=abundance))
+pp = pp + geom_bar(stat = "identity") + 
+    ylab("Total abundance cels/l") + xlab("") + theme_bw()
+
+
+ggplotly(pp)
+```
+
+### Flagellate abundance
+
+```{r}
+pp = ggplot(subset(phyto.htg.lf, scientificName=="Flagellate"), aes(x=floor_date(SampleDateLocal, "day"), y=abundance))
+pp = pp + geom_bar(stat = "identity") + 
+    ylab("Total abundance cels/l") + xlab("") + theme_bw()
+
+
+ggplotly(pp)
+```
+
+### Foraminifera abundance
+
+```{r}
+pp = ggplot(subset(phyto.htg.lf, scientificName=="Foraminifera"), aes(x=floor_date(SampleDateLocal, "day"), y=abundance))
+pp = pp + geom_bar(stat = "identity") + 
+    ylab("Total abundance cels/l") + xlab("") + theme_bw()
+
+
+ggplotly(pp)
+```
+
+### Radiozoa abundance
+
+```{r}
+pp = ggplot(subset(phyto.htg.lf, scientificName=="Radiozoa"), aes(x=floor_date(SampleDateLocal, "day"), y=abundance))
+pp = pp + geom_bar(stat = "identity") + 
+    ylab("Total abundance cels/l") + xlab("") + theme_bw()
+
+
+ggplotly(pp)
+```
+
+
+### Silicoflagellate abundance
+
+```{r}
+pp = ggplot(subset(phyto.htg.lf, scientificName=="Silicoflagellate"), aes(x=floor_date(SampleDateLocal, "day"), y=abundance))
+pp = pp + geom_bar(stat = "identity") + 
+    ylab("Total abundance cels/l") + xlab("") + theme_bw()
+
+
+ggplotly(pp)
+```
+
+
+
+
+
+
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### Salinity
+
+```{r}
+pp = ggplot(subset(bottle, SALINITY_FLAG==1), aes(x = floor_date(LOCAL_TRIP_START_TIME, "day"), y = SALINITY, colour=factor(DEPTH.recoded)))
+pp = pp + geom_line() + ylim(34,36) + facet_grid(DEPTH.recoded~.) + 
+  xlab("") + ylab("PSU") + 
+  theme_bw() + theme(legend.position = "none")
+
+ggplotly(pp)
+
+
+```
+
+### Silicate
+
+```{r}
+pp = ggplot(subset(bottle, SILICATE_FLAG==1), aes(x = floor_date(LOCAL_TRIP_START_TIME, "day"), y = SILICATE_UMOL_PER_L, colour=factor(DEPTH.recoded)))
+pp = pp + geom_line()  + facet_grid(DEPTH.recoded~.) + 
+  xlab("") + ylab("umol/l") + 
+  theme_bw() + theme(legend.position = "none")
+
+ggplotly(pp)
+
+```
+
+### Nitrate
+
+```{r}
+pp = ggplot(subset(bottle, NITRATE_FLAG==1), aes(x = floor_date(LOCAL_TRIP_START_TIME, "day"), y = NITRATE_UMOL_PER_L, colour=factor(DEPTH.recoded)))
+pp = pp + geom_line() + facet_grid(DEPTH.recoded~.) + 
+  xlab("") + ylab("umol/l") + 
+  theme_bw() + theme(legend.position = "none")
+
+ggplotly(pp)
+
+```
+
+
+### Phosphate
+
+```{r}
+pp = ggplot(subset(bottle, PHOSPHATE_FLAG==1), aes(x = floor_date(LOCAL_TRIP_START_TIME, "day"), y = PHOSPHATE_UMOL_PER_L, colour=factor(DEPTH.recoded)))
+pp = pp + geom_line() + facet_grid(DEPTH.recoded~.) + 
+  xlab("") + ylab("umol/l") + 
+  theme_bw() + theme(legend.position = "none")
+
+ggplotly(pp)
+
+```
+
+
+### Ammonium
+
+```{r}
+pp = ggplot(subset(bottle, AMMONIUM_FLAG==1), aes(x = floor_date(LOCAL_TRIP_START_TIME, "day"), y = AMMONIUM_UMOL_PER_L, colour=factor(DEPTH.recoded)))
+pp = pp + geom_line() + facet_grid(DEPTH.recoded~.) + 
+  xlab("") + ylab("umol/l") + theme_bw() + theme(legend.position = "none")
+
+ggplotly(pp)
+
+```
+
+
+### Total CO2
+
+```{r}
+pp = ggplot(subset(bottle, CARBON_FLAG==1), aes(x = floor_date(LOCAL_TRIP_START_TIME, "day"), y = TCO2_UMOL_PER_KG, colour=factor(DEPTH.recoded)))
+pp = pp + geom_line() + facet_grid(DEPTH.recoded~.) + 
+  xlab("") + ylab("umol/kg") + theme_bw() + theme(legend.position = "none")
+
+ggplotly(pp)
+
+```
+
+
+### Total Alkalinity
+
+```{r}
+pp = ggplot(subset(bottle, ALKALINITY_FLAG==1), aes(x = floor_date(LOCAL_TRIP_START_TIME, "day"), y = TALKALINITY_UMOL_PER_KG, colour=factor(DEPTH.recoded)))
+pp = pp + geom_line() + facet_grid(DEPTH.recoded~.) + 
+  xlab("") + ylab("umol/kg") + theme_bw() + theme(legend.position = "none")
+
+ggplotly(pp)
+
+```
+
+
+### Oxygen
+
+```{r}
+pp = ggplot(subset(bottle, OXYGEN_FLAG==1), aes(x = floor_date(LOCAL_TRIP_START_TIME, "day"), y = OXYGEN_UMOL_PER_L, colour=factor(DEPTH.recoded)))
+pp = pp + geom_line() + facet_grid(DEPTH.recoded~.) + 
+  xlab("") + ylab("umol/kg") + theme_bw() + theme(legend.position = "none")
+
+ggplotly(pp)
+
+```
+
